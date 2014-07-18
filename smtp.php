@@ -7,7 +7,6 @@
 	* can also sign both text/plain and multipart/alternative
 	* encryption also works
 	* missing email-parsing, verify and decrypt
-	* missing Content-ID support
 	**/
 	class smtp
 	{
@@ -101,7 +100,7 @@
 		* @param $public_key encrypt your message using this key, see http://php.net/manual/en/function.gnupg-import.php
 		* @return array($from, $to, $subject, $content_type, $headers, $body)
 		**/
-		public function create_email($subject, $html_body, $text_body, $to, $from = NULL, $attachments = NULL, $charset = NULL, $extra_headers = NULL, $private_key = NULL, $public_key = NULL)
+		public function create_email($subject, $html_body, $text_body, $to, $from = NULL, $attachments = NULL, $charset = NULL, $extra_headers = NULL, $private_key = NULL, $public_key = NULL, $text_mime_type = NULL, $html_mime_type = NULL)
 		{
 			// set default vars if missing
 			if(!$charset) $charset = $this->default_charset;
@@ -110,13 +109,29 @@
 			// if from only contains a username, append default hostname
 			if(!strstr($from, '@')) $from .= '@' . $this->hostname;
 
+			if(!$text_mime_type) $text_mime_type = "text/plain; charset={$charset}";
+			if(!$html_mime_type) $html_mime_type = "text/html; charset={$charset}";
+
 			// remeber what encoding we had, in case we need to change it
 			$old_internal_encoding = mb_internal_encoding();
 
 			// if we have a html_body
 			if($html_body)
 			{
-				// FIXME: build support for CID, by sending an array as $html_body
+				// if html is a multipart/related
+				if(is_array($html_body))
+				{
+					// rename body as parts
+					$html_parts = $html_body;
+
+					// move first part to body
+					$html_body = array_shift($html_parts);
+				}
+				else
+				{
+					// set no parts
+					$html_parts = NULL;
+				}
 
 				// check what encoding it has.
 				$encoding = mb_detect_encoding($html_body, 'ASCII, UTF-8, ISO-8859-1', TRUE);
@@ -139,6 +154,59 @@
 	</body>
 </html>
 HTML_BLOCK;
+				}
+
+				// Create a list of headers for the html_part
+				$html_headers = array();
+				$html_headers['Content-Type'] = "Content-Type: {$html_mime_type}";
+				$html_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: 8bit";
+
+				// if we want html base64_encoded
+				if($this->always_base64_encode_html OR $private_key)
+				{
+					// add base64 encodign to avoid manipulation by MDA and MTA:s
+					$html_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
+					$html_body = chunk_split(base64_encode($html_body));
+				}
+
+				// if html is a multipart/related
+				if($html_parts)
+				{
+					// Create an empty list of mime-parts
+					$parts = array();
+
+					// add current part as first part
+					$parts[] = $this->flaten_email($html_headers, $html_body);
+
+					// Iterate over each attachment/html-part.
+					foreach((array) $html_parts as $row_id => $attachment)
+					{
+						// add cid if missing
+						if(is_array($attachment))
+						{
+							if(!isset($attachment['cid']))
+							{
+								$attachment['cid'] = $row_id;
+							}
+
+							// add as mime-part
+							$parts[] = $this->flatten_attachments($attachment);
+						}
+						else
+						{
+							// add as mime-part, prepend CID
+							$parts[] = "Content-ID: <{$row_id}>\n" . $this->flatten_attachments($attachment);
+						}
+					}
+
+					// merge mime-parts into a multipart/related
+					$parts = $this->mime_encode('multipart/related', $parts, TRUE);
+
+					// set the multipart/related as the current part
+					$html_mime_type = "multipart/related";
+					$html_headers = $parts['headers'];
+					$html_body = $parts['body'];
+					unset($parts);
 				}
 			}
 
@@ -241,9 +309,9 @@ HTML_BLOCK;
 			$base_headers += $extra_headers;
 
 			// define the first current part as plain text
-			$content_type = "text/plain";
+			$content_type = $text_mime_type;
 			$part_headers = array();
-			$part_headers['Content-Type'] = "Content-Type: {$content_type}; charset={$charset}";
+			$part_headers['Content-Type'] = "Content-Type: {$content_type}";
 			$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: 8bit";
 
 			// if we want text base64_encoded
@@ -268,31 +336,23 @@ HTML_BLOCK;
 					// create an empty list of mime-parts
 					$parts = array();
 
-					// if current part is text/plain, reserv the first part for html
+					// if current part is text/plain, put html first
 					if($content_type == "text/plain")
 					{
-						$parts['html'] = "";
+						// add the html part
+						$parts['html'] = $this->flaten_email($html_headers, $html_body);
+
+						// add the current part
+						$parts['txt'] = $this->flaten_email($part_headers, $email_data);
 					}
-
-					// add the current part
-					$parts['txt'] = $this->flaten_email($part_headers, $email_data);
-
-					// define the next part, the html part
-					$part_headers = array();
-					$part_headers['Content-Type'] = "Content-Type: text/html; charset={$charset}";
-					$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: 8bit";
-
-					// if we want html base64_encoded
-					if($this->always_base64_encode_html OR $private_key)
-					{
-						// add base64 encodign to avoid manipulation by MDA and MTA:s
-						$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
-						$parts['html'] = $this->flaten_email($part_headers, chunk_split(base64_encode($html_body)));
-					}
+					// else put html last
 					else
 					{
-						// if not, just add it in readable format
-						$parts['html'] = $this->flaten_email($part_headers, $html_body);
+						// add the current part
+						$parts['txt'] = $this->flaten_email($part_headers, $email_data);
+
+						// add the html part
+						$parts['html'] = $this->flaten_email($html_headers, $html_body);
 					}
 
 					// merge part in to a multipart/alternative
@@ -309,7 +369,7 @@ HTML_BLOCK;
 					// set html as the current part;
 					$email_data = $html_body;
 					$content_type = "text/html";
-					$part_headers['Content-Type'] = "Content-Type: {$content_type}; charset={$charset}";
+					$part_headers['Content-Type'] = "Content-Type: {$content_type}";
 				}
 			}
 
@@ -325,92 +385,7 @@ HTML_BLOCK;
 				// Iterate over each attachment.
 				foreach((array) $attachments as $row_id => $attachment)
 				{
-					// Reset headers between each part
-					$part_headers = array();
-
-					// If we got a list of meta-data about the file
-					if(is_array($attachment))
-					{
-						// attatched messages? some clients don't like attatched messages to be base64 encoded
-						if($attachment['file_mime_type'] == "message/rfc822")
-						{
-							// set file headers according to meta-data recived in $attachment-array
-							$part_headers['Content-Type'] = "Content-Type: {$attachment['file_mime_type']}; name=\"{$attachment['file_name']}\"";
-							$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$attachment['file_name']}\"";
-
-							// if array include the data
-							if(isset($attachment['data']))
-							{
-								// add it as a mime-part
-								$parts[] = $this->flaten_email($part_headers, $attachment['data']);
-							}
-							else
-							{
-								// fetch the data, and add it as a mime-part
-								$parts[] = $this->flaten_email($part_headers, file_get_contents($attachment['uri']));
-							}
-						}
-						else
-						{
-							// set file headers according to meta-data recived in $attachment-array
-							$part_headers['Content-Type'] = "Content-Type: {$attachment['file_mime_type']}; name=\"{$attachment['file_name']}\"";
-							$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$attachment['file_name']}\"";
-							$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
-
-							// if array include the data
-							if(isset($attachment['data']))
-							{
-								// base64-encode the data, and add it as a mime-part
-								$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode($attachment['data'])));
-							}
-							else
-							{
-								// fetch and base64-encode the data, and add it as a mime-part
-								$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode(file_get_contents($attachment['uri']))));
-							}
-						}
-					}
-
-					// if we got the uri to a file
-					else if(file_exists($attachment))
-					{
-						// if this is the first time using file_info
-						if(!isset($file_info) AND !$file_info)
-						{
-							// create a file-info for mime-info
-							$file_info = new finfo(FILEINFO_MIME);
-						}
-
-						// read mime-type of file
-						$file_mime_type = $file_info->file($attachment);
-
-						// copoy basename of the uri as filename
-						$file_name = basename($attachment);
-
-						// set file headers according to the above collected meta-data
-						$part_headers['Content-Type'] = "Content-Type: {$file_mime_type}; name=\"{$file_name}\"";
-						$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$file_name}\"";
-						$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
-
-						// base64-encode the data, and add it as a mime-part
-						$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode(file_get_contents($attachment))));
-					}
-
-					// unknown data
-					else
-					{
-						// just add it as a text-file
-						$file_mime_type = "text/plain";
-						$file_name = "attachment_{$row_id}.txt";
-
-						// set file headers according to the above defined meta-data
-						$part_headers['Content-Type'] = "Content-Type: {$file_mime_type}; name=\"{$file_name}\"";
-						$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$file_name}\"";
-						$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
-
-						// base64-encode the data, and add it as a mime-part
-						$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode($attachment)));
-					}
+					$parts[] = $this->flatten_attachments($attachment);
 				}
 
 				// merge mime-parts into a multipart/mixed
@@ -710,6 +685,122 @@ HTML_BLOCK;
 			// if shorter then wanted, concat it to another hash of the missing size
 			return $hash . $this->generate_hash($length - $current_length);
 		}
-	}
 
+		public function flatten_attachments($attachment, $flatten = TRUE)
+		{
+			// initzilize data
+			$part_headers = array();
+			$data = "";
+			$file_mime_type = "text/plain";
+			$file_name = "file.txt";
+
+			// Create a list of new headers
+			$new_headers = array();
+
+			// If we got a list of meta-data about the file
+			if(is_array($attachment))
+			{
+				// if array include the data
+				if(isset($attachment['data']))
+				{
+					// use it as dataa
+					$data = $attachment['data'];
+				}
+				// else if include a uri
+				else if(isset($attachment['uri']))
+				{
+					// fetch the data
+					$data = file_get_contents($attachment['uri']);
+				}
+
+				// if array include the mime type
+				if(isset($attachment['file_mime_type']))
+				{
+					// use it
+					$file_mime_type = $attachment['file_mime_type'];
+				}
+				// if array incude a uri
+				else if(isset($attachment['uri']))
+				{
+					// create a file-info for mime-info
+					$file_info = new finfo(FILEINFO_MIME);
+
+					// read mime-type of file
+					$file_mime_type = $file_info->file($attachment['uri']);
+				}
+
+				// if array include a filename
+				if(isset($attachment['file_name']))
+				{
+					// use it
+					$file_name = $attachment['file_name'];
+				}
+				// if array include a uri
+				else if(isset($attachment['uri']))
+				{
+					// copy basename of the uri as filename
+					$file_name = basename($attachment['uri']);
+				}
+
+				// if array include extra headers
+				if(isset($attachment['headers']) AND is_array($attachment['headers']))
+				{
+					// use them
+					$part_headers = $attachment['headers'];
+				}
+
+				if(isset($attachment['cid']))
+				{
+					$new_headers['Content-ID'] = "Content-ID: <{$attachment['cid']}>";
+				}
+			}
+			// if we got the uri to a file
+			else if(file_exists($attachment))
+			{
+				// create a file-info for mime-info
+				$file_info = new finfo(FILEINFO_MIME);
+
+				// read mime-type of file
+				$file_mime_type = $file_info->file($attachment);
+
+				// copoy basename of the uri as filename
+				$file_name = basename($attachment);
+
+				// fetch the data
+				$data = file_get_contents($attachment);
+			}
+			// Other?
+			else
+			{
+				// use it as data
+				$data = $attachment;
+			}
+
+			// set file headers according to meta-data we collected
+			$new_headers['Content-Type'] = "Content-Type: {$file_mime_type}; name=\"{$file_name}\"";
+			$new_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$file_name}\"";
+
+			// bese64 encode data unless its and attatched messages?
+			if($file_mime_type != "message/rfc822")
+			{
+				$new_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
+				$data = chunk_split(base64_encode($data));
+			}
+
+			// merge headers with new headers
+			$part_headers += $new_headers;
+
+			// In case we wanted a flattened attatcments
+			if($flatten)
+			{
+				// flaten and return it
+				return $this->flaten_email($part_headers, $data);
+			}
+			else
+			{
+				// otherwise, return it as an array
+				return array('headers' => $part_headers, 'body' => $data);
+			}
+		}
+	}
 ?>
