@@ -330,21 +330,43 @@ HTML_BLOCK;
 					// If we got a list of meta-data about the file
 					if(is_array($attachment))
 					{
-						// set file headers according to meta-data recived in $attachment-array
-						$part_headers['Content-Type'] = "Content-Type: {$attachment['file_mime_type']}; name=\"{$attachment['file_name']}\"";
-						$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$attachment['file_name']}\"";
-						$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
-
-						// if array include the data
-						if(isset($attachment['data']))
+						// attatched messages? some clients don't like attatched messages to be base64 encoded
+						if($attachment['file_mime_type'] == "message/rfc822")
 						{
-							// base64-encode the data, and add it as a mime-part
-							$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode($attachment['data'])));
+							// set file headers according to meta-data recived in $attachment-array
+							$part_headers['Content-Type'] = "Content-Type: {$attachment['file_mime_type']}; name=\"{$attachment['file_name']}\"";
+							$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$attachment['file_name']}\"";
+
+							// if array include the data
+							if(isset($attachment['data']))
+							{
+								// add it as a mime-part
+								$parts[] = $this->flaten_email($part_headers, $attachment['data']);
+							}
+							else
+							{
+								// fetch the data, and add it as a mime-part
+								$parts[] = $this->flaten_email($part_headers, file_get_contents($attachment['uri']));
+							}
 						}
 						else
 						{
-							// fetch and base64-encode the data, and add it as a mime-part
-							$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode(file_get_contents($attachment['uri']))));
+							// set file headers according to meta-data recived in $attachment-array
+							$part_headers['Content-Type'] = "Content-Type: {$attachment['file_mime_type']}; name=\"{$attachment['file_name']}\"";
+							$part_headers['Content-Disposition'] = "Content-Disposition: attachment; filename=\"{$attachment['file_name']}\"";
+							$part_headers['Content-Transfer-Encoding'] = "Content-Transfer-Encoding: base64";
+
+							// if array include the data
+							if(isset($attachment['data']))
+							{
+								// base64-encode the data, and add it as a mime-part
+								$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode($attachment['data'])));
+							}
+							else
+							{
+								// fetch and base64-encode the data, and add it as a mime-part
+								$parts[] = $this->flaten_email($part_headers, chunk_split(base64_encode(file_get_contents($attachment['uri']))));
+							}
 						}
 					}
 
