@@ -5,8 +5,9 @@
 	* Allows easy sending of emails, both plain text, HTML and
 	* mixed messages with alternate content and attachments.
 	* can also sign both text/plain and multipart/alternative
-	* encryption not implemented yet
-	* also missing email-parsing, verify and decrypt
+	* encryption also works
+	* missing email-parsing, verify and decrypt
+	* missing Content-ID support
 	**/
 	class smtp
 	{
@@ -503,7 +504,73 @@ HTML_BLOCK;
 			// do we have a public key for encryption?
 			if($public_key)
 			{
-				// FIXME: encrypt message using public key
+				// make sure we have the tools installed
+				if(!class_exists("gnupg"))
+				{
+					// abort if tools missing
+					trigger_error("Missing package: dev-php/pecl-gnupg");
+					return FALSE;
+				}
+
+				// create an instace of the gpg-tool
+				$gpg = new gnupg();
+
+				// is the $public_key a file?
+				if(file_exists($public_key))
+				{
+					// import that file as a key
+					$key_info = $gpg->import(file_get_contents($public_key));
+				}
+
+				// or is it just a string
+				else
+				{
+					// import that string as a key
+					$key_info = $gpg->import($public_key);
+				}
+
+				// did we fail the importing?
+				if(!$key_info)
+				{
+					// abort
+					trigger_error("Failed to load private key");
+					return FALSE;
+				}
+
+				// mark the imported key as current encrypt key
+				$result = $gpg->addencryptkey($key_info["fingerprint"]);
+
+				// encrypt the curren mime-part
+				$encryption = $gpg->encrypt($this->flaten_email($part_headers, $email_data));
+
+				// create a list of mime-parts
+				$parts = array();
+
+				// create default encryption header for part 1 (meta)
+				$encryption_headers = array();
+				$encryption_headers[] = 'Content-Type: application/pgp-encrypted';
+				$encryption_headers[] = 'Content-Disposition: attachment';
+				$encryption_headers[] = 'Content-Transfer-Encoding: 7Bit';
+
+				// make mime-part of headers and version info
+				$parts['meta'] = $this->flaten_email($encryption_headers, "Version: 1");
+
+				// create deafult encryption headers for part 2 (encrypted data)
+				$encryption_headers = array();
+				$encryption_headers[] = 'Content-Type: application/octet-stream';
+				$encryption_headers[] = 'Content-Disposition: inline; filename="msg.asc"';
+				$encryption_headers[] = 'Content-Transfer-Encoding: 7Bit';
+
+				// make mime-part of headers and encrypted data
+				$parts['encrypted'] = $this->flaten_email($encryption_headers, $encryption);
+
+				// merge parts to a multipart/encrypted
+				$parts = $this->mime_encode('multipart/encrypted; protocol="application/pgp-encrypted"', $parts, TRUE);
+
+				// set the multipart/encrypted as current part
+				$content_type = "multipart/encrypted";
+				$part_headers = $parts['headers'];
+				$email_data = $parts['body'];
 			}
 
 			// return the collected data about the email
