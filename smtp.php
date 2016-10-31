@@ -59,6 +59,8 @@
 			// if successyfully created
 			if($parts)
 			{
+				/* Prevent duplicate to-fields */
+				unset($parts['headers']['To']);
 				/* Send the actual message. */
 				return mail($parts['to'], $parts['subject'], $parts['body'], $this->flaten_headers($parts['headers']));
 			}
