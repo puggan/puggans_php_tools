@@ -8,6 +8,8 @@
 
 	/**
 	* A class for wraping output in html
+	*
+	* @url https://github.com/puggan/puggans_php_tools/blob/master/page.php
 	**/
 	class page_generator
 	{

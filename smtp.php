@@ -7,6 +7,8 @@
 	* can also sign both text/plain and multipart/alternative
 	* encryption also works
 	* missing email-parsing, verify and decrypt
+	*
+	* @url https://github.com/puggan/puggans_php_tools/blob/master/smtp.php
 	**/
 	class smtp
 	{
@@ -805,4 +807,3 @@ HTML_BLOCK;
 			}
 		}
 	}
-?>

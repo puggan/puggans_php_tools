@@ -2,7 +2,11 @@
 
 	// $database = new database('use dbname', 'username', 'password');
 
-	// Mysqli wrapper for compability with my other database-classes
+	/**
+	* Mysqli wrapper for compability with my other database-classes
+	*
+	* @url https://github.com/puggan/puggans_php_tools/blob/master/database.php
+	*/
 	class database
 	{
 		private $credential = array();
@@ -199,4 +203,3 @@
 			return "IN (" . implode(", ", $int_list) . ")";
 		}
 	}
-?>
